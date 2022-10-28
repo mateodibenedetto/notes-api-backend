@@ -58,11 +58,11 @@ app.delete('/api/notes/:id', (req, res) => {
 app.post('/api/notes', (req, res) => {
   const note = req.body
 
-  // if (!note || !note.content) {
-  //   return res.status(400).json({
-  //     error: 'Content not found'
-  //   })
-  // }
+  if (!note || !note.content) {
+    return res.status(400).json({
+      error: 'Content not found'
+    })
+  }
 
   const ids = notes.map(note => note.id)
   const maxId = Math.max(...ids)
@@ -85,7 +85,7 @@ app.use((request, response) => {
   })
 })
 
-const PORT = 3001
+const PORT = process.env.PORT || 3001
 app.listen(PORT, () => {
   console.log(`Server listening on ${PORT}`)
 })
