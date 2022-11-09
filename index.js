@@ -1,60 +1,91 @@
-const express = require('express')
-const cors = require('cors')
+require('dotenv').config()
+require('./mongo')
 
+const Sentry = require('@sentry/node')
+const Tracing = require('@sentry/tracing')
+const express = require('express')
 const app = express()
-const logger = require('./loggerMiddleware')
+const cors = require('cors')
+const Note = require('./models/Note')
+const notFound = require('./middleware/notFound.js')
+const handleErrors = require('./middleware/handleErrors')
 
 app.use(cors())
 app.use(express.json())
 
-app.use(logger)
+// Sentry
+Sentry.init({
+  dsn: 'https://46dfbd276a154038ab0391c1dbc2e80d@o4504095186288640.ingest.sentry.io/4504095218663424',
+  integrations: [
+    // enable HTTP calls tracing
+    new Sentry.Integrations.Http({ tracing: true }),
+    // enable Express.js middleware tracing
+    new Tracing.Integrations.Express({ app })
+  ],
 
-let notes = [
-  {
-    id: 1,
-    content: 'HTML is easy',
-    date: '2019-05-30T17:30:31.098Z',
-    important: true
-  },
-  {
-    id: 2,
-    content: 'Browser can execute only JavaScript',
-    date: '2019-05-30T18:39:34.091Z',
-    important: false
-  },
-  {
-    id: 3,
-    content: 'GET and POST are the most important methods of HTTP protocol',
-    date: '2019-05-30T19:20:14.298Z',
-    important: true
-  }
-]
+  // Set tracesSampleRate to 1.0 to capture 100%
+  // of transactions for performance monitoring.
+  // We recommend adjusting this value in production
+  tracesSampleRate: 1.0
+})
 
+// RequestHandler creates a separate execution context using domains, so that every
+// transaction/span/breadcrumb is attached to its own Hub instance
+app.use(Sentry.Handlers.requestHandler())
+// TracingHandler creates a trace for every incoming request
+app.use(Sentry.Handlers.tracingHandler())
+
+// Get root
 app.get('/', (req, res) => {
   res.send('<h1>Helloou</h1>')
 })
 
+// Get all notes
 app.get('/api/notes', (req, res) => {
-  res.json(notes)
+  Note.find({}).then(notes => {
+    res.json(notes)
+  })
 })
 
-app.get('/api/notes/:id', (req, res) => {
-  const id = Number(req.params.id)
-  const note = notes.find(note => note.id === id)
+// Get a note by an id
+app.get('/api/notes/:id', (req, res, next) => {
+  const { id } = req.params
+  Note.findById(id).then((note) => {
+    if (note) {
+      res.json(note)
+    } else {
+      res.status(404).end()
+    }
+  }).catch(err => next(err))
+})
 
-  if (note) {
-    res.json(note)
-  } else {
-    res.status(404).end()
+// Update a note
+app.put('/api/notes/:id', (request, response, next) => {
+  const { id } = request.params
+  const note = request.body
+
+  const newNoteInfo = {
+    content: note.content,
+    important: note.important
   }
+
+  Note.findByIdAndUpdate(id, newNoteInfo, { new: true })
+    .then((result) => {
+      response.json(result)
+    })
 })
 
-app.delete('/api/notes/:id', (req, res) => {
-  const id = Number(req.params.id)
-  notes = notes.filter(note => note.id !== id)
+// Delete a note
+app.delete('/api/notes/:id', (req, res, next) => {
+  const { id } = req.params
+  Note.findByIdAndRemove(id).then(result => {
+    result.status(204).end()
+  }).catch(err => next(err))
+
   res.status(204).end()
 })
 
+// Create a new note
 app.post('/api/notes', (req, res) => {
   const note = req.body
 
@@ -64,28 +95,29 @@ app.post('/api/notes', (req, res) => {
     })
   }
 
-  const ids = notes.map(note => note.id)
-  const maxId = Math.max(...ids)
-
-  const newNote = {
-    id: maxId + 1,
+  const newNote = new Note({
     content: note.content,
-    important: typeof note.important !== 'undefined' ? note.important : false,
-    date: new Date().toISOString()
-  }
+    date: new Date(),
+    important: note.important || false
+  })
 
-  notes = notes.concat(newNote)
-
-  res.status(201).json(newNote)
-})
-
-app.use((request, response) => {
-  response.status(404).json({
-    error: 'Not Found'
+  newNote.save().then(savedNote => {
+    res.json(savedNote)
   })
 })
 
-const PORT = process.env.PORT || 3001
+// Not found
+app.use(notFound)
+
+// Sentry Handle error
+app.use(Sentry.Handlers.errorHandler())
+
+// Error
+app.use(handleErrors)
+
+const PORT = process.env.PORT
 app.listen(PORT, () => {
   console.log(`Server listening on ${PORT}`)
 })
+
+module.exports = app
